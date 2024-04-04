@@ -9,13 +9,16 @@
  *
  */
 
-#include "skeleton.dtsi"
+#include <dt-bindings/iio/adc/at91-sama5d2_adc.h>
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
-#include <dt-bindings/clk/at91.h>
+#include <dt-bindings/reset/sama7g5-reset.h>
+#include <dt-bindings/clock/at91.h>
 #include <dt-bindings/dma/at91.h>
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/mfd/at91-usart.h>
+#include <dt-bindings/nvmem/microchip,sama7g5-otpc.h>
+#include <dt-bindings/thermal/thermal.h>
 
 / {
 	model = "Microchip SAMA7G5 family SoC";
@@ -32,9 +35,10 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x0>;
-			clocks = <&pmc PMC_TYPE_CORE 8>, <&pmc PMC_TYPE_CORE 22>, <&main_xtal>;
-			clock-names = "cpu", "master", "xtal";
+			clocks = <&pmc PMC_TYPE_CORE PMC_CPUPLL>;
+			clock-names = "cpu";
 			operating-points-v2 = <&cpu_opp_table>;
+			#cooling-cells = <2>; /* min followed by max */
 		};
 	};
 
@@ -73,19 +77,47 @@
 		};
 	};
 
+	thermal-zones {
+		cpu_thermal: cpu-thermal {
+			polling-delay-passive = <1000>;
+			polling-delay = <5000>;
+			thermal-sensors = <&thermal_sensor>;
+
+			trips {
+				cpu_normal: cpu-alert0 {
+					temperature = <90000>;
+					hysteresis = <0>;
+					type = "passive";
+				};
+
+				cpu_hot: cpu-alert1 {
+					temperature = <95000>;
+					hysteresis = <0>;
+					type = "passive";
+				};
+
+				cpu_critical: cpu-critical {
+					temperature = <100000>;
+					hysteresis = <0>;
+					type = "critical";
+				};
+			};
+
+			cooling-maps {
+				map0 {
+					trip = <&cpu_normal>;
+					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+
+				map1 {
+					trip = <&cpu_hot>;
+					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+			};
+		};
+	};
+
 	clocks {
-		slow_rc_osc: slow_rc_osc {
-			compatible = "fixed-clock";
-			#clock-cells = <0>;
-			clock-frequency = <32000>;
-		};
-
-		main_rc: main_rc {
-			compatible = "fixed-clock";
-			#clock-cells = <0>;
-			clock-frequency = <12000000>;
-		};
-
 		slow_xtal: slow_xtal {
 			compatible = "fixed-clock";
 			#clock-cells = <0>;
@@ -103,6 +135,54 @@
 		};
 	};
 
+	utmi_clk: utmi-clk {
+		compatible = "microchip,sama7g5-utmi-clk";
+		sfr-phandle = <&sfr>;
+		#clock-cells = <1>;
+		clocks = <&pmc PMC_TYPE_CORE PMC_UTMI>;
+		clock-names = "utmi_clk";
+		resets = <&reset_controller SAMA7G5_RESET_USB_PHY1>,
+			 <&reset_controller SAMA7G5_RESET_USB_PHY2>,
+			 <&reset_controller SAMA7G5_RESET_USB_PHY3>;
+		reset-names = "usb0_reset", "usb1_reset", "usb2_reset";
+	};
+
+	utmi {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		usb_phy0: phy@0 {
+			compatible = "microchip,sama7g5-usb-phy";
+			sfr-phandle = <&sfr>;
+			reg = <0>;
+			clocks = <&utmi_clk UTMI1>;
+			clock-names = "utmi_clk";
+			status = "disabled";
+			#phy-cells = <0>;
+		};
+
+		usb_phy1: phy@1 {
+			compatible = "microchip,sama7g5-usb-phy";
+			sfr-phandle = <&sfr>;
+			reg = <1>;
+			clocks = <&utmi_clk UTMI2>;
+			clock-names = "utmi_clk";
+			status = "disabled";
+			#phy-cells = <0>;
+		};
+
+		usb_phy2: phy@2 {
+			compatible = "microchip,sama7g5-usb-phy";
+			sfr-phandle = <&sfr>;
+			reg = <2>;
+			clocks = <&utmi_clk UTMI3>;
+			clock-names = "utmi_clk";
+			status = "disabled";
+			#phy-cells = <0>;
+		};
+	};
+
 	vddout25: fixed-regulator-vddout25 {
 		compatible = "regulator-fixed";
 
@@ -117,8 +197,15 @@
 		compatible = "mmio-sram";
 		#address-cells = <1>;
 		#size-cells = <1>;
-		reg = <0x100000 0x20000>;
+		reg = <0x100000 0x3400>;
 		ranges;
+	};
+
+	thermal_sensor: thermal-sensor {
+		compatible = "generic-adc-thermal";
+		#thermal-sensor-cells = <0>;
+		io-channels = <&adc AT91_SAMA7G5_ADC_TEMP_CHANNEL>;
+		io-channel-names = "sensor-channel";
 	};
 
 	soc {
@@ -126,6 +213,48 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 		ranges;
+
+		usb0: gadget@200000 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			compatible = "microchip,sama7g5-udc";
+			reg = <0x00200000 0x100000
+			       0xe0814000 0x400>;
+			interrupts = <GIC_SPI 104 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&pmc PMC_TYPE_PERIPHERAL 104>, <&usb_clk>;
+			clock-names = "pclk", "hclk";
+			status = "disabled";
+		};
+
+		usb1: gadget@300000 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			compatible = "microchip,sama7g5-udc";
+			reg = <0x00300000 0x100000
+			       0xe0818000 0x400>;
+			interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&pmc PMC_TYPE_PERIPHERAL 105>, <&usb_clk>;
+			clock-names = "pclk", "hclk";
+			status = "disabled";
+		};
+
+		usb2: ohci@400000 {
+			compatible = "microchip,sama7g5-ohci", "usb-ohci";
+			reg = <0x00400000 0x100000>;
+			interrupts = <GIC_SPI 106 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&pmc PMC_TYPE_PERIPHERAL 106>, <&utmi_clk UTMI1>, <&usb_clk>;
+			clock-names = "ohci_clk", "hclk", "uhpck";
+			status = "disabled";
+		};
+
+		usb3: ehci@500000 {
+			compatible = "atmel,at91sam9g45-ehci", "usb-ehci";
+			reg = <0x00500000 0x100000>;
+			interrupts = <GIC_SPI 106 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&usb_clk>, <&pmc PMC_TYPE_PERIPHERAL 106>;
+			clock-names = "usb_clk", "ehci_clk";
+			status = "disabled";
+		};
 
 		nfc_sram: sram@600000 {
 			compatible = "mmio-sram";
@@ -151,7 +280,7 @@
 				  0x1 0x0 0x48000000 0x8000000
 				  0x2 0x0 0x50000000 0x8000000
 				  0x3 0x0 0x58000000 0x8000000>;
-			clocks = <&pmc PMC_TYPE_CORE 23>; /* PMC_MCK1 */
+			clocks = <&pmc PMC_TYPE_CORE PMC_MCK1>;
 			status = "disabled";
 
 			nand_controller: nand-controller {
@@ -166,7 +295,7 @@
 			};
 		};
 
-		securam: securam@e0000000 {
+		securam: sram@e0000000 {
 			compatible = "microchip,sama7g5-securam", "atmel,sama5d2-securam", "mmio-sram";
 			reg = <0xe0000000 0x4000>;
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 18>;
@@ -208,8 +337,8 @@
 			reg = <0xe0018000 0x200>;
 			interrupts = <GIC_SPI 10 IRQ_TYPE_LEVEL_HIGH>;
 			#clock-cells = <2>;
-			clocks = <&clk32k 1>, <&clk32k 0>, <&main_xtal>, <&main_rc>;
-			clock-names = "td_slck", "md_slck", "main_xtal", "main_rc";
+			clocks = <&clk32k 1>, <&clk32k 0>, <&main_xtal>;
+			clock-names = "td_slck", "md_slck", "main_xtal";
 		};
 
 		reset_controller: reset-controller@e001d000 {
@@ -240,7 +369,7 @@
 		clk32k: clock-controller@e001d050 {
 			compatible = "microchip,sama7g5-sckc", "microchip,sam9x60-sckc";
 			reg = <0xe001d050 0x4>;
-			clocks = <&slow_rc_osc>, <&slow_xtal>;
+			clocks = <&slow_xtal>;
 			#clock-cells = <1>;
 		};
 
@@ -304,8 +433,6 @@
 			dma-names = "tx", "rx";
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 78>, <&pmc PMC_TYPE_GCK 78>;
 			clock-names = "pclk", "gclk";
-			assigned-clocks = <&pmc PMC_TYPE_GCK 78>;
-			assigned-clock-parents = <&pmc PMC_TYPE_CORE 10>; /* sys pll div. */
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
@@ -321,8 +448,6 @@
 			dma-names = "tx", "rx";
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 79>, <&pmc PMC_TYPE_GCK 79>;
 			clock-names = "pclk", "gclk";
-			assigned-clocks = <&pmc PMC_TYPE_GCK 79>;
-			assigned-clock-parents = <&pmc PMC_TYPE_CORE 10>; /* sys pll div. */
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
@@ -338,7 +463,7 @@
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 61>, <&pmc PMC_TYPE_GCK 61>;
 			clock-names = "hclk", "cclk";
 			assigned-clocks = <&pmc PMC_TYPE_GCK 61>;
-			assigned-clock-parents = <&pmc PMC_TYPE_CORE 10>; /* sys pll div */
+			assigned-clock-parents = <&pmc PMC_TYPE_CORE PMC_SYSPLL>;
 			assigned-clock-rates = <40000000>;
 			bosch,mram-cfg = <0x3400 0 0 64 0 0 32 32>;
 			status = "disabled";
@@ -354,7 +479,7 @@
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 62>, <&pmc PMC_TYPE_GCK 62>;
 			clock-names = "hclk", "cclk";
 			assigned-clocks = <&pmc PMC_TYPE_GCK 62>;
-			assigned-clock-parents = <&pmc PMC_TYPE_CORE 10>; /* sys pll div */
+			assigned-clock-parents = <&pmc PMC_TYPE_CORE PMC_SYSPLL>;
 			assigned-clock-rates = <40000000>;
 			bosch,mram-cfg = <0x7800 0 0 64 0 0 32 32>;
 			status = "disabled";
@@ -370,7 +495,7 @@
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 63>, <&pmc PMC_TYPE_GCK 63>;
 			clock-names = "hclk", "cclk";
 			assigned-clocks = <&pmc PMC_TYPE_GCK 63>;
-			assigned-clock-parents = <&pmc PMC_TYPE_CORE 10>; /* sys pll div */
+			assigned-clock-parents = <&pmc PMC_TYPE_CORE PMC_SYSPLL>;
 			assigned-clock-rates = <40000000>;
 			bosch,mram-cfg = <0xbc00 0 0 64 0 0 32 32>;
 			status = "disabled";
@@ -386,7 +511,7 @@
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 64>, <&pmc PMC_TYPE_GCK 64>;
 			clock-names = "hclk", "cclk";
 			assigned-clocks = <&pmc PMC_TYPE_GCK 64>;
-			assigned-clock-parents = <&pmc PMC_TYPE_CORE 10>; /* sys pll div */
+			assigned-clock-parents = <&pmc PMC_TYPE_CORE PMC_SYSPLL>;
 			assigned-clock-rates = <40000000>;
 			bosch,mram-cfg = <0x0 0 0 64 0 0 32 32>;
 			status = "disabled";
@@ -402,7 +527,7 @@
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 65>, <&pmc PMC_TYPE_GCK 65>;
 			clock-names = "hclk", "cclk";
 			assigned-clocks = <&pmc PMC_TYPE_GCK 65>;
-			assigned-clock-parents = <&pmc PMC_TYPE_CORE 10>; /* sys pll div */
+			assigned-clock-parents = <&pmc PMC_TYPE_CORE PMC_SYSPLL>;
 			assigned-clock-rates = <40000000>;
 			bosch,mram-cfg = <0x4400 0 0 64 0 0 32 32>;
 			status = "disabled";
@@ -418,7 +543,7 @@
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 66>, <&pmc PMC_TYPE_GCK 66>;
 			clock-names = "hclk", "cclk";
 			assigned-clocks = <&pmc PMC_TYPE_GCK 66>;
-			assigned-clock-parents = <&pmc PMC_TYPE_CORE 10>; /* sys pll div */
+			assigned-clock-parents = <&pmc PMC_TYPE_CORE PMC_SYSPLL>;
 			assigned-clock-rates = <40000000>;
 			bosch,mram-cfg = <0x8800 0 0 64 0 0 32 32>;
 			status = "disabled";
@@ -437,6 +562,9 @@
 			atmel,min-sample-rate-hz = <200000>;
 			atmel,max-sample-rate-hz = <20000000>;
 			atmel,startup-time-ms = <4>;
+			#io-channel-cells = <1>;
+			nvmem-cells = <&temperature_calib>;
+			nvmem-cell-names = "temperature_calib";
 			status = "disabled";
 		};
 
@@ -446,7 +574,7 @@
 			interrupts = <GIC_SPI 80 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 80>, <&pmc PMC_TYPE_GCK 80>;
 			clock-names = "hclock", "multclk";
-			assigned-clock-parents = <&pmc PMC_TYPE_CORE 10>; /* sys pll div. */
+			assigned-clock-parents = <&pmc PMC_TYPE_CORE PMC_SYSPLL>;
 			assigned-clocks = <&pmc PMC_TYPE_GCK 80>;
 			assigned-clock-rates = <200000000>;
 			microchip,sdcal-inverted;
@@ -459,7 +587,7 @@
 			interrupts = <GIC_SPI 81 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 81>, <&pmc PMC_TYPE_GCK 81>;
 			clock-names = "hclock", "multclk";
-			assigned-clock-parents = <&pmc PMC_TYPE_CORE 10>; /* sys pll div. */
+			assigned-clock-parents = <&pmc PMC_TYPE_CORE PMC_SYSPLL>;
 			assigned-clocks = <&pmc PMC_TYPE_GCK 81>;
 			assigned-clock-rates = <200000000>;
 			microchip,sdcal-inverted;
@@ -472,11 +600,99 @@
 			interrupts = <GIC_SPI 82 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 82>, <&pmc PMC_TYPE_GCK 82>;
 			clock-names = "hclock", "multclk";
-			assigned-clock-parents = <&pmc PMC_TYPE_CORE 10>; /* sys pll div */
+			assigned-clock-parents = <&pmc PMC_TYPE_CORE PMC_SYSPLL>;
 			assigned-clocks = <&pmc PMC_TYPE_GCK 82>;
 			assigned-clock-rates = <200000000>;
 			microchip,sdcal-inverted;
 			status = "disabled";
+		};
+
+		csi2host: csi2host@e1400000 {
+			compatible = "snps,dw-csi";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <0xe1400000 0x7FF>;
+			interrupts = <GIC_SPI 33 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&pmc PMC_TYPE_PERIPHERAL 33>, <&pmc PMC_TYPE_GCK 33>;
+			clock-names = "perclk", "phyclk";
+			assigned-clocks = <&pmc PMC_TYPE_GCK 33>;
+			assigned-clock-rates = <26600000>;
+			snps,output-type = <1>;
+			phys = <&csi_dphy>;
+			status = "disabled";
+
+			port@1 {
+				reg = <1>;
+				csi2host_in: endpoint {
+				};
+			};
+
+			port@2 {
+				reg = <2>;
+				csi2host_out: endpoint {
+				};
+			};
+		};
+
+		csi_dphy: dphy@e1400040 {
+			compatible = "snps,dw-dphy-rx";
+			#phy-cells = <0>;
+			bus-width = <8>;
+			snps,dphy-frequency = <900000>;
+			snps,phy_type = <0>;
+			reg = <0xe1400040 0x20>;
+			status = "disabled";
+		};
+
+		csi2dc: csi2dc@e1404000 {
+			compatible = "microchip,sama7g5-csi2dc";
+			reg = <0xe1404000 0x500>;
+			clocks = <&pmc PMC_TYPE_PERIPHERAL 34>, <&xisc>;
+			clock-names = "pclk", "scck";
+			assigned-clocks = <&xisc>;
+			assigned-clock-rates = <266000000>;
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+				port@0 {
+					reg = <0>;
+					csi2dc_in: endpoint {
+					};
+				};
+
+				port@1 {
+					reg = <1>;
+					csi2dc_out: endpoint {
+						bus-width = <14>;
+						hsync-active = <1>;
+						vsync-active = <1>;
+						remote-endpoint = <&xisc_in>;
+					};
+				};
+			};
+		};
+
+		xisc: xisc@e1408000 {
+			compatible = "microchip,sama7g5-isc";
+			reg = <0xe1408000 0x2000>;
+			interrupts = <GIC_SPI 56 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&pmc PMC_TYPE_PERIPHERAL 56>;
+			clock-names = "hclock";
+			#clock-cells = <0>;
+			clock-output-names = "isc-mck";
+			status = "disabled";
+
+			port {
+				xisc_in: endpoint {
+					bus-type = <5>; /* Parallel */
+					bus-width = <14>;
+					hsync-active = <1>;
+					vsync-active = <1>;
+					remote-endpoint = <&csi2dc_out>;
+				};
+			};
 		};
 
 		pwm: pwm@e1604000 {
@@ -497,6 +713,7 @@
 			dma-names = "rx";
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 68>, <&pmc PMC_TYPE_GCK 68>;
 			clock-names = "pclk", "gclk";
+			sound-name-prefix = "PDMC0";
 			status = "disabled";
 		};
 
@@ -509,6 +726,32 @@
 			dma-names = "rx";
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 69>, <&pmc PMC_TYPE_GCK 69>;
 			clock-names = "pclk", "gclk";
+			sound-name-prefix = "PDMC1";
+			status = "disabled";
+		};
+
+		asrc: sound@e1610000 {
+			compatible = "microchip,sama7g5-asrc";
+			reg = <0xe1610000 0x1000>;
+			interrupts = <GIC_SPI 30 IRQ_TYPE_LEVEL_HIGH>;
+			#sound-dai-cells = <1>;
+			dmas = <&dma0 AT91_XDMAC_DT_PERID(55)>,
+			       <&dma0 AT91_XDMAC_DT_PERID(56)>,
+			       <&dma0 AT91_XDMAC_DT_PERID(57)>,
+			       <&dma0 AT91_XDMAC_DT_PERID(58)>,
+			       <&dma0 AT91_XDMAC_DT_PERID(59)>,
+			       <&dma0 AT91_XDMAC_DT_PERID(60)>,
+			       <&dma0 AT91_XDMAC_DT_PERID(61)>,
+			       <&dma0 AT91_XDMAC_DT_PERID(62)>;
+			dma-names = "rx0", "tx0", "rx1", "tx1",
+				    "rx2", "tx2", "rx3", "tx3";
+			clocks = <&pmc PMC_TYPE_PERIPHERAL 30>, <&pmc PMC_TYPE_GCK 30>;
+			clock-names = "pclk", "gclk";
+			microchip,triggers = <&i2s0>, <&i2s1>, <&pdmc0>, <&pdmc1>,
+					     <&ssc0>, <&ssc1>, <&spdiftx>, <&spdifrx>;
+			microchip,trigger-indexes = <1>, <2>, <3>, <4>, <5>, <8>, <9>, <10>;
+			assigned-clocks = <&pmc PMC_TYPE_GCK 30>;
+			assigned-clock-parents = <&pmc PMC_TYPE_CORE PMC_AUDIOPMCPLL>;
 			status = "disabled";
 		};
 
@@ -522,6 +765,7 @@
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 84>, <&pmc PMC_TYPE_GCK 84>;
 			clock-names = "pclk", "gclk";
 			status = "disabled";
+			sound-name-prefix = "SPDIFRX0";
 		};
 
 		spdiftx: spdiftx@e1618000 {
@@ -533,6 +777,7 @@
 			dma-names = "tx";
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 85>, <&pmc PMC_TYPE_GCK 85>;
 			clock-names = "pclk", "gclk";
+			sound-name-prefix = "SPDIFTX0";
 		};
 
 		i2s0: i2s@e161c000 {
@@ -544,6 +789,7 @@
 			dma-names = "tx", "rx";
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 57>, <&pmc PMC_TYPE_GCK 57>;
 			clock-names = "pclk", "gclk";
+			sound-name-prefix = "I2SMCC0";
 			status = "disabled";
 		};
 
@@ -556,7 +802,13 @@
 			dma-names = "tx", "rx";
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 58>, <&pmc PMC_TYPE_GCK 58>;
 			clock-names = "pclk", "gclk";
+			sound-name-prefix = "I2SMCC1";
 			status = "disabled";
+		};
+
+		sfr: sfr@e1624000 {
+			compatible = "microchip,sama7g5-sfr", "syscon";
+			reg = <0xe1624000 0x4000>;
 		};
 
 		eic: interrupt-controller@e1628000 {
@@ -586,6 +838,20 @@
 			interrupts = <GIC_SPI 71 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 71>, <&pmc PMC_TYPE_GCK 71>;
 			clock-names = "pclk", "gclk";
+		};
+
+		ssc0: sound@e180c000 {
+			compatible = "atmel,at91sam9g45-ssc";
+			reg = <0xe180c000 0x1000>;
+			#sound-dai-cells = <0>;
+			interrupts = <GIC_SPI 86 IRQ_TYPE_LEVEL_HIGH>;
+			dmas = <&dma0 AT91_XDMAC_DT_PERID(44)>,
+			       <&dma0 AT91_XDMAC_DT_PERID(45)>;
+			dma-names = "rx", "tx";
+			clocks = <&pmc PMC_TYPE_PERIPHERAL 86>;
+			clock-names = "pclk";
+			sound-name-prefix = "SSC0";
+			status = "disabled";
 		};
 
 		aes: crypto@e1810000 {
@@ -683,6 +949,20 @@
 			};
 		};
 
+		ssc1: sound@e200c000 {
+			compatible = "atmel,at91sam9g45-ssc";
+			reg = <0xe200c000 0x1000>;
+			#sound-dai-cells = <0>;
+			interrupts = <GIC_SPI 87 IRQ_TYPE_LEVEL_HIGH>;
+			dmas = <&dma0 AT91_XDMAC_DT_PERID(46)>,
+			       <&dma0 AT91_XDMAC_DT_PERID(47)>;
+			dma-names = "rx", "tx";
+			clocks = <&pmc PMC_TYPE_PERIPHERAL 87>;
+			clock-names = "pclk";
+			sound-name-prefix = "SSC1";
+			status = "disabled";
+		};
+
 		trng: rng@e2010000 {
 			compatible = "microchip,sama7g5-trng", "atmel,at91sam9g45-trng";
 			reg = <0xe2010000 0x100>;
@@ -752,10 +1032,25 @@
 				atmel,fifo-size = <16>;
 				status = "disabled";
 			};
+			spi7: spi@400 {
+                                compatible = "atmel,at91rm9200-spi";
+                                reg = <0x400 0x200>;
+                                interrupts = <GIC_SPI 45 IRQ_TYPE_LEVEL_HIGH>;
+                                clocks = <&pmc PMC_TYPE_PERIPHERAL 45>;
+                                clock-names = "spi_clk";
+                                #address-cells = <1>;   
+                                #size-cells = <0>;
+                                atmel,fifo-size = <32>;
+                                dmas = <&dma0 AT91_XDMAC_DT_PERID(20)>,
+                                            <&dma0 AT91_XDMAC_DT_PERID(19)>;
+                                dma-names = "tx", "rx";
+                                status = "disabled";
+                        };
+
 		};
 
 		gmac0: ethernet@e2800000 {
-			compatible = "cdns,sama7g5-gem";
+			compatible = "microchip,sama7g5-gem";
 			reg = <0xe2800000 0x1000>;
 			interrupts = <GIC_SPI 51 IRQ_TYPE_LEVEL_HIGH
 				      GIC_SPI 116 IRQ_TYPE_LEVEL_HIGH
@@ -765,19 +1060,20 @@
 				      GIC_SPI 120 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&pmc PMC_TYPE_PERIPHERAL 51>, <&pmc PMC_TYPE_PERIPHERAL 51>, <&pmc PMC_TYPE_GCK 51>, <&pmc PMC_TYPE_GCK 53>;
 			clock-names = "pclk", "hclk", "tx_clk", "tsu_clk";
-			assigned-clocks = <&pmc PMC_TYPE_GCK 51>;
-			assigned-clock-parents = <&pmc PMC_TYPE_CORE 21>; /* eth pll div. */
-			assigned-clock-rates = <125000000>;
+			assigned-clocks = <&pmc PMC_TYPE_GCK 51>, <&pmc PMC_TYPE_GCK 53>;
+			assigned-clock-rates = <125000000>, <200000000>;
 			status = "disabled";
 		};
 
 		gmac1: ethernet@e2804000 {
-			compatible = "cdns,sama7g5-emac";
+			compatible = "microchip,sama7g5-emac";
 			reg = <0xe2804000 0x1000>;
 			interrupts = <GIC_SPI 52 IRQ_TYPE_LEVEL_HIGH
 				      GIC_SPI 121 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&pmc PMC_TYPE_PERIPHERAL 52>, <&pmc PMC_TYPE_PERIPHERAL 52>;
-			clock-names = "pclk", "hclk";
+			clocks = <&pmc PMC_TYPE_PERIPHERAL 52>, <&pmc PMC_TYPE_PERIPHERAL 52>, <&pmc PMC_TYPE_GCK 54>;
+			clock-names = "pclk", "hclk", "tsu_clk";
+			assigned-clocks = <&pmc PMC_TYPE_GCK 54>;
+			assigned-clock-rates = <200000000>;
 			status = "disabled";
 		};
 
@@ -904,6 +1200,17 @@
 		ddr3phy: ddr3phy@e3804000 {
 			compatible = "microchip,sama7g5-ddr3phy";
 			reg = <0xe3804000 0x1000>;
+		};
+
+		otpc: efuse@e8c00000 {
+			compatible = "microchip,sama7g5-otpc", "syscon";
+			reg = <0xe8c00000 0x100>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			temperature_calib: calib@1 {
+				reg = <OTP_PKT(1) 76>;
+			};
 		};
 
 		gic: interrupt-controller@e8c11000 {
